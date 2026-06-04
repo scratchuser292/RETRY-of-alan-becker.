@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stick Figure: Code Escape</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            background: #0a0a0a; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            border: 4px solid #333;
+            box-shadow: 0 0 30px rgba(255, 100, 0, 0.3);
+        }
+        canvas { display: block; background: #111; }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 16px;
+            text-shadow: 2px 2px 0 #000;
+            pointer-events: none;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #aaa;
+            font-size: 12px;
+            text-align: center;
+            pointer-events: none;
+        }
+        .key { 
+            display: inline-block; 
+            background: #333; 
+            padding: 2px 6px; 
+            border-radius: 4px; 
+            margin: 0 2px;
+            border: 1px solid #555;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="ui">
+            <div>❤️ Health: <span id="health">100</span></div>
+            <div>🔑 Hacks: <span id="hacks">0</span>/3</div>
+            <div>🏆 Score: <span id="score">0</span></div>
+        </div>
+        <div id="controls">
+            <span class="key">A/D</span> Move | 
+            <span class="key">W/Space</span> Jump | 
+            <span class="key">E</span> Hack | 
+            <span class="key">J/Click</span> Attack
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Game State
+const game = {
+    state: 'playing',
+    score: 0,
+    hacksCollected: 0,
+    totalHacks: 3,
+    camera: { x: 0, y: 0 },
+    keys: {},
+    mouse: { x: 0, y: 0, clicked: false }
+};
+
+// Player (Red Stick Figure)
+const player = {
+    x: 100, y: 400, 
+    width: 20, height: 40,
+    vx: 0, vy: 0,
+    speed: 5, jumpPower: 12,
+    onGround: false, jumpsLeft: 2,
+    health: 100, maxHealth: 100,
+    facingRight: true,
+    attacking: false, attackTimer: 0,
+    invincible: 0,
+    jumpHeld: false
+};
+
+// Level Data
+const platforms = [
+    { x: 0, y: 550, w: 2000, h: 50, type: 'ground' },
+    { x: 300, y: 450, w: 150, h: 20, type: 'platform' },
+    { x: 550, y: 380, w: 120, h: 20, type: 'platform' },
+    { x: 750, y: 300, w: 180, h: 20, type: 'platform' },
+    { x: 1000, y: 400, w: 100, h: 20, type: 'platform' },
+    { x: 1200, y: 320, w: 150, h: 20, type: 'platform' },
+    { x: 1450, y: 250, w: 120, h: 20, type: 'platform' },
+    { x: 1650, y: 350, w: 200, h: 20, type: 'platform' },
+    { x: 280, y: 350, w: 20, h: 100, type: 'wall' },
+    { x: 980, y: 300, w: 20, h: 100, type: 'wall' }
+];
+
+// Collectibles (Green Hack Terminals)
+const collectibles = [
+    { x: 360, y: 410, w: 30, h: 30, collected: false, type: 'hack' },
+    { x: 820, y: 260, w: 30, h: 30, collected: false, type: 'hack' },
+    { x: 1500, y: 210, w: 30, h: 30, collected: false, type: 'hack' }
+];
+
+// Enemies (Orange Stick Figures)
+const enemies = [
+    { x: 600, y: 510, w: 20, h: 40, vx: 2, patrolStart: 500, patrolEnd: 700, health: 30 },
+    { x: 1100, y: 360, w: 20, h: 40, vx: -1.5, patrolStart: 1000, patrolEnd: 1200, health: 30 },
+    { x: 1700, y: 310, w: 20, h: 40, vx: 2.5, patrolStart: 1650, patrolEnd: 1850, health: 30 }
+];
+
+// Exit Door
+const exitDoor = { x: 1800, y: 470, w: 40, h: 80, locked: true };
+
+// Input Handling
+window.addEventListener('keydown', e => {
+    game.keys[e.key.toLowerCase()] = true;
+    if (e.key === 'Escape') game.state = game.state === 'playing' ? 'paused' : 'playing';
+});
+window.addEventListener('keyup', e => game.keys[e.key.toLowerCase()] = false);
+canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    game.mouse.x = e.clientX - rect.left;
+    game.mouse.y = e.clientY - rect.top;
+});
+canvas.addEventListener('mousedown', () => game.mouse.clicked = true);
+canvas.addEventListener('mouseup', () => game.mouse.clicked = false);
+
+function checkCollision(rect1, rect2) {
+    return rect1.x < rect2.x + rect2.w &&
+           rect1.x + rect1.width > rect2.x &&
+           rect1.y < rect2.y + rect2.h &&
+           rect1.y + rect1.height > rect2.y;
+}
+
+function updatePlayer() {
+    if (game.keys['a'] || game.keys['arrowleft']) {
+        player.vx = -player.speed;
+        player.facingRight = false;
+    } else if (game.keys['d'] || game.keys['arrowright']) {
+        player.vx = player.speed;
+        player.facingRight = true;
+    } else {
+        player.vx *= 0.8;
+    }
+
+    if ((game.keys['w'] || game.keys['arrowup'] || game.keys[' ']) && player.jumpsLeft > 0) {
+        if (!player.jumpHeld) {
+            player.vy = -player.jumpPower;
+            player.jumpsLeft--;
+            player.jumpHeld = true;
+        }
+    } else {
+        player.jumpHeld = false;
+    }
+
+    player.vy += 0.6;
+    player.x += player.vx;
+    player.y += player.vy;
+
+    player.onGround = false;
+    for (const plat of platforms) {
+        if (checkCollision(player, plat)) {
+            if (player.vy > 0 && player.y < plat.y) {
+                player.y = plat.y - player.height;
+                player.vy = 0;
+                player.onGround = true;
+                player.jumpsLeft = 2;
+            } else if (player.vy < 0 && player.y > plat.y) {
+                player.y = plat.y + plat.h;
+                player.vy = 0;
+            } else if (player.vx > 0) player.x = plat.x - player.width;
+            else if (player.vx < 0) player.x = plat.x + plat.w;
+        }
+    }
+
+    if (player.x < 0) player.x = 0;
+    if (player.x > 2000 - player.width) player.x = 2000 - player.width;
+    if (player.y > 600) {
+        player.health -= 20;
+        player.x = 100; player.y = 400; player.vy = 0;
+    }
+
+    if ((game.keys['j'] || game.mouse.clicked) && player.attackTimer === 0) {
+        player.attacking = true;
+        player.attackTimer = 15;
+        game.mouse.clicked = false;
+    }
+    if (player.attackTimer > 0) player.attackTimer--;
+    else player.attacking = false;
+
+    if (player.invincible > 0) player.invincible--;
+
+    if (game.keys['e']) {
+        for (const col of collectibles) {
+            if (!col.collected && checkCollision(player, {x: col.x, y: col.y, width: col.w, height: col.h})) {
+                col.collected = true;
+                game.hacksCollected++;
+                game.score += 100;
+                if (game.hacksCollected >= game.totalHacks) exitDoor.locked = false;
+            }
+        }
+    }
+
+    for (const enemy of enemies) {
+        if (enemy.health <= 0) continue;
+        
+        if (player.attacking && checkCollision(
+            {x: player.facingRight ? player.x + player.width : player.x - 30, 
+             y: player.y, width: 30, height: player.height}, 
+            enemy
+        )) {
+            enemy.health -= 10;
+            enemy.vx = player.facingRight ? 5 : -5;
+            game.score += 10;
+        } else if (checkCollision(player, enemy) && player.invincible === 0) {
+            player.health -= 15;
+            player.invincible = 60;
+            player.vx = player.x < enemy.x ? -8 : 8;
+            player.vy = -5;
+        }
+    }
+
+    if (!exitDoor.locked && checkCollision(player, exitDoor)) {
+        game.state = 'win';
+    }
+
+    document.getElementById('health').textContent = Math.max(0, player.health);
+    document.getElementById('hacks').textContent = game.hacksCollected;
+    document.getElementById('score').textContent = game.score;
+
+    if (player.health <= 0) game.state = 'gameOver';
+}
+
+function updateEnemies() {
+    for (const enemy of enemies) {
+        if (enemy.health <= 0) continue;
+        enemy.x += enemy.vx;
+        if (enemy.x <= enemy.patrolStart || enemy.x >= enemy.patrolEnd) enemy.vx *= -1;
+        
+        let onGround = false;
+        for (const plat of platforms) {
+            if (enemy.x + enemy.width > plat.x && enemy.x < plat.x + plat.w &&
+                enemy.y + enemy.h >= plat.y && enemy.y + enemy.h <= plat.y + 10) {
+                onGround = true;
+                break;
+            }
+        }
+        if (!onGround) enemy.y += 3;
+    }
+}
+
+function drawStickFigure(x, y, color, facingRight, attacking, isEnemy = false) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    
+    const headR = 6;
+    const bodyLen = 15;
+    const armY = y + headR * 2 + 5;
+    const legY = y + headR * 2 + bodyLen;
+    
+    ctx.beginPath(); ctx.arc(x + 10, y + headR, headR, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + 10, y + headR * 2); ctx.lineTo(x + 10, legY); ctx.stroke();
+    
+    if (attacking) {
+        ctx.beginPath(); ctx.moveTo(x + 10, armY); ctx.lineTo(facingRight ? x + 30 : x - 10, armY - 5); ctx.stroke();
+    } else {
+        ctx.beginPath(); ctx.moveTo(x + 10, armY); ctx.lineTo(facingRight ? x + 20 : x, armY + 8); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.moveTo(x + 10, armY); ctx.lineTo(facingRight ? x : x + 20, armY + 8); ctx.stroke();
+    
+    ctx.beginPath(); ctx.moveTo(x + 10, legY); ctx.lineTo(facingRight ? x + 5 : x + 15, legY + 12); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + 10, legY); ctx.lineTo(facingRight ? x + 15 : x + 5, legY + 12); ctx.stroke();
+    
+    if (isEnemy) {
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(x + (facingRight ? 12 : 6), y + 4, 2, 2);
+        ctx.fillRect(x + (facingRight ? 16 : 10), y + 4, 2, 2);
+    }
+}
+
+function draw() {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    game.camera.x = Math.max(0, Math.min(player.x - canvas.width / 2, 2000 - canvas.width));
+    ctx.save();
+    ctx.translate(-game.camera.x, 0);
+    
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 2000; i += 50) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 600); ctx.stroke(); }
+    for (let i = 0; i < 600; i += 50) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(2000, i); ctx.stroke(); }
+    
+    for (const plat of platforms) {
+        ctx.fillStyle = plat.type === 'ground' ? '#222' : '#333';
+        ctx.fillRect(plat.x, plat.y, plat.w, plat.h);
+        ctx.strokeStyle = plat.type === 'ground' ? '#444' : '#555';
+        ctx.strokeRect(plat.x, plat.y, plat.w, plat.h);
+    }
+    
+    for (const col of collectibles) {
+        if (col.collected) continue;
+        ctx.fillStyle = '#0f0'; ctx.fillRect(col.x, col.y, col.w, col.h);
+        ctx.strokeStyle = '#0a0'; ctx.strokeRect(col.x, col.y, col.w, col.h);
+        ctx.fillStyle = '#000'; ctx.fillRect(col.x + 5, col.y + 5, col.w - 10, col.h - 10);
+        ctx.fillStyle = '#0f0'; ctx.font = '10px monospace'; ctx.fillText('>', col.x + 8, col.y + 18);
+    }
+    
+    ctx.fillStyle = exitDoor.locked ? '#500' : '#050';
+    ctx.fillRect(exitDoor.x, exitDoor.y, exitDoor.w, exitDoor.h);
+    ctx.strokeStyle = exitDoor.locked ? '#f00' : '#0f0';
+    ctx.strokeRect(exitDoor.x, exitDoor.y, exitDoor.w, exitDoor.h);
+    ctx.fillStyle = '#fff'; ctx.font = '12px monospace';
+    ctx.fillText(exitDoor.locked ? 'LOCKED' : 'EXIT', exitDoor.x + 2, exitDoor.y - 5);
+    
+    for (const enemy of enemies) {
+        if (enemy.health <= 0) continue;
+        drawStickFigure(enemy.x, enemy.y, '#ff8c00', enemy.vx > 0, false, true);
+        ctx.fillStyle = '#f00'; ctx.fillRect(enemy.x, enemy.y - 10, 20 * (enemy.health / 30), 4);
+    }
+    
+    if (player.invincible % 10 < 5) {
+        drawStickFigure(player.x, player.y, '#ff0000', player.facingRight, player.attacking);
+    }
+    
+    ctx.restore();
+    
+    if (game.state === 'paused') {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#fff'; ctx.font = '40px monospace'; ctx.textAlign = 'center';
+        ctx.fillText('PAUSED', canvas.width/2, canvas.height/2);
+        ctx.font = '20px monospace'; ctx.fillText('Press ESC to Resume', canvas.width/2, canvas.height/2 + 40);
+    } else if (game.state === 'gameOver') {
+        ctx.fillStyle = 'rgba(100,0,0,0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#fff'; ctx.font = '40px monospace'; ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2);
+        ctx.font = '20px monospace'; ctx.fillText(`Final Score: ${game.score}`, canvas.width/2, canvas.height/2 + 40);
+        ctx.fillText('Refresh to Retry', canvas.width/2, canvas.height/2 + 70);
+    } else if (game.state === 'win') {
+        ctx.fillStyle = 'rgba(0,100,0,0.8)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#fff'; ctx.font = '40px monospace'; ctx.textAlign = 'center';
+        ctx.fillText('ESCAPED!', canvas.width/2, canvas.height/2);
+        ctx.font = '20px monospace'; ctx.fillText(`Score: ${game.score}`, canvas.width/2, canvas.height/2 + 40);
+        ctx.fillText('All hacks collected!', canvas.width/2, canvas.height/2 + 70);
+    }
+}
+
+function loop() {
+    if (game.state === 'playing') {
+        updatePlayer();
+        updateEnemies();
+    }
+    draw();
+    requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
