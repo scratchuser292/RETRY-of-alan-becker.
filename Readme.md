@@ -29,7 +29,7 @@ This project wouldn't exist without the original visionaries:
 
 ## 🐛 Issues & Bugs
 If you find any bugs or if something isn't working exactly like the original swtqq version, please let me know! 
-* Open an [Issue](https://github.com/scratchuser292/RETRY-of-alan-becker/issues) on this repo.
+* Open an [Issue](https://github.com/scratchuser292/RETRY-of-alan-becker./wiki/Issues) on this repo.
 * Describe what happened and how to reproduce it.
 
 ## 🤝 Contributing
